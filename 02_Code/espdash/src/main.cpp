@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
+#include <ArduinoOTA.h>
 
 #include "SimpleWeather.h"
 
@@ -14,10 +15,9 @@ String replaceSpacesWithNewlines(const String &input);
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
-const char* ssid     = "SSID";
-const char* password = "PASSWORD";
 
-
+const char* ssid     = "";
+const char* password = "";
 
 // Define NTP Client to get time
 WiFiUDP ntpUDP;
@@ -30,6 +30,8 @@ String minute;
 
 
 const int ThermistorPin = 32;
+const int LightPin = 34;
+int light;
 
 int Vo;
 float R1 = 10000; // value of R1 on board
@@ -43,12 +45,12 @@ void back();
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 
-//http://api.openweathermap.org/data/2.5/weather?q=CITY,CO&APPID={API key}
+//http://api.openweathermap.org/data/2.5/weather?q=,US&APPID={}
 
-String Key = ""; //API key
+String Key = "";
 weatherData w;
-OpenWeather weather(Key, "City,Co");
-OpenWeather forecast(Key, "City,Co",1); //Co = country from openweather api
+OpenWeather weather(Key, ",US");
+OpenWeather forecast(Key, ",US",1);
 
 
 unsigned long interval = 0;  // Interval of 10 minutes in milliseconds
@@ -56,12 +58,12 @@ unsigned long previousMillis = 0;
 bool run = true;
 
 
-
+bool res = false;
 
 unsigned long bprevMillis = 0;
 unsigned long clockInterval = 0;
 
-
+void sleep();
 
 
 // Select I2C BUS
@@ -175,16 +177,42 @@ back();
 
 
   timeClient.begin();
-  timeClient.setTimeOffset(-14400); //set time offest, EST example
+  //timeClient.setTimeOffset(-14400);
+  timeClient.setTimeOffset(-18000);
+  ArduinoOTA.setHostname("ESPDashboard");
 
-  
- 
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else {
+      type = "filesystem";
+    }
+    // NOTE: if updating FS this would be the place to unmount FS using FS.end()
+    Serial.println("Start updating " + type);
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+  });
+  ArduinoOTA.begin();
+
  
 
 }
  
 void loop() {
-  
+  ArduinoOTA.handle();
 
 
 
@@ -193,7 +221,10 @@ void loop() {
 
 
   Vo = analogRead(ThermistorPin);
-  //Serial.println(Vo);
+  light = analogRead(LightPin);
+  Serial.println(light);
+  if(light >= 1000){
+      //Serial.println(Vo);
   R2 = R1 * (4096.0 / (float)Vo - 1.0); //calculate resistance on thermistor
   logR2 = log(R2);
   T = (1.0 / (c1 + c2*logR2 + c3*logR2*logR2*logR2)); // temperature in Kelvin
@@ -207,15 +238,16 @@ void loop() {
 unsigned long currentMillis = millis();
 
 
-if(currentMillis - bprevMillis >= clockInterval){
+if(currentMillis - bprevMillis >= clockInterval or res){
   bprevMillis = currentMillis;
-  if(!timeClient.update()) {
+  if(!timeClient.update() and res == false) {
     timeClient.forceUpdate();
   }
+  formattedDate = timeClient.getFormattedTime();
   // The formattedDate comes with the following format:
   // 2018-05-28T16:00:13Z
   // We need to extract date and time
-  formattedDate = timeClient.getFormattedTime();
+  
   //Serial.println("");
   //Serial.println(formattedDate);
 
@@ -273,12 +305,13 @@ if(currentMillis - bprevMillis >= clockInterval){
   clockInterval = 30000;
 }
   // Check if the interval has passed
-  if (currentMillis - previousMillis >= interval) {
+  if ((currentMillis - previousMillis >= interval) or res) {
     // Save the current time
     previousMillis = currentMillis;
-
+    if (currentMillis - previousMillis >= interval){
     // Call your function here
      weather.updateStatus(&w);
+    }
 
     TCA9548A(4); //outside temp
     display.clearDisplay();
@@ -305,9 +338,9 @@ if(currentMillis - bprevMillis >= clockInterval){
     int F = (int(floor(w.current_Temp * 9.0)/ 5.0 + 32.0));
     display.print(F);
     display.println(" F");//fixed 6
-    display.print("Hum:");
-    display.print(int(floor(w.humidity)));
-    display.println("%");
+    //display.print("Hum:");
+    //display.print(int(floor(w.humidity)));
+    //display.println("%");
 
     display.print("Prep:");
     display.print(int(floor(w.rain)));
@@ -345,20 +378,8 @@ if(currentMillis - bprevMillis >= clockInterval){
   display.display(); 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-if (run == true){
-
+if (run == true or res){
+  res = false;
   // Write to OLED on bus number 5
   TCA9548A(2); //Inside temp
   display.clearDisplay();
@@ -371,10 +392,10 @@ if (run == true){
   display.println(" F");//fixed 6
   display.display(); 
 
-
+  
   forecast.updateStatus(&w);
 
-    TCA9548A(5); //Tomorrow weather
+  TCA9548A(5); //Tomorrow weather
   display.clearDisplay();
   display.setTextSize(3);
   display.setTextColor(WHITE);
@@ -436,18 +457,16 @@ if (run == true){
 
 //   delay(600000);       // Wait for 600 seconds
 
-
-
-
-
-
-
-
-
-
+}else{
+  sleep();
+  res == true;
 }
+}
+  
 
 
+
+//https:192.168.254.254
 
 
 void back(){
@@ -533,6 +552,35 @@ void back(){
   delay(1000);
 
 }
+
+void sleep(){
+ TCA9548A(0);
+  display.clearDisplay();
+ display.display();
+  TCA9548A(1);
+  display.clearDisplay();
+display.display();
+  TCA9548A(2);
+  display.clearDisplay();
+display.display();
+  TCA9548A(3);
+  display.clearDisplay();
+display.display();
+    TCA9548A(4);
+  display.clearDisplay();
+display.display();
+    TCA9548A(5);
+  display.clearDisplay();
+  display.display();
+      TCA9548A(6);
+  display.clearDisplay();
+display.display();
+      TCA9548A(7);
+  
+   display.clearDisplay();
+   display.display();
+}
+
 
 String replaceSpacesWithNewlines(const String &input) {
   String modified = "";
