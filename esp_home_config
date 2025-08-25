@@ -1,0 +1,280 @@
+esphome:
+  name: 
+  friendly_name: OLED Dashboard
+  min_version: 2025.5.0
+  name_add_mac_suffix: false
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+
+# Allow Over-The-Air updates
+ota:
+- platform: esphome
+
+wifi:
+  ssid: ""
+  password: ""
+
+  ap:
+    ssid: "OLED-Dashboard Fallback"
+    password: ""
+
+globals:
+  - id: displays_on
+    type: bool
+    initial_value: 'true'
+
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  id: i2c0
+  frequency: 400kHz
+
+# TCA9548A multiplexer support
+tca9548a:
+  - address: 0x70
+    id: multiplex0
+    i2c_id: i2c0
+    channels:
+      - bus_id: multiplex0channel0
+        channel: 0
+      - bus_id: multiplex0channel1
+        channel: 1
+      - bus_id: multiplex0channel2
+        channel: 2
+      - bus_id: multiplex0channel3
+        channel: 3
+      - bus_id: multiplex0channel4
+        channel: 4
+      - bus_id: multiplex0channel5
+        channel: 5
+    
+
+# Light sensor (simple analog read)
+sensor:
+  - platform: adc
+    pin: GPIO34
+    name: "Light Sensor"
+    attenuation: 11db
+    update_interval: 10s
+
+  # Thermistor sensor
+  - platform: resistance
+    id: thermistor_resistance
+    sensor: adc_thermistor
+    configuration: UPSTREAM
+    resistor: 10kOhm
+    reference_voltage: 3.3V
+
+  - platform: adc
+    id: adc_thermistor
+    pin: GPIO32
+    attenuation: 11db
+    update_interval: 10s
+
+  - platform: ntc
+    sensor: thermistor_resistance
+    name: "Thermistor Temperature"
+    id: thermistor_temp
+    calibration:
+      b_constant: 3950
+      reference_resistance: 10kOhm
+      reference_temperature: 25°C
+    unit_of_measurement: "°C"
+
+  - platform: wifi_signal
+    name: esp-dash WiFi Signal
+
+  - platform: homeassistant
+    id: outside_temp
+    entity_id: weather.forecast_home
+    attribute: temperature
+
+  - platform: homeassistant
+    id: outside_humidity
+    entity_id: weather.forecast_home
+    attribute: humidity
+
+
+text_sensor:
+  - platform: homeassistant
+    id: ha_datetime
+    entity_id: sensor.date_time
+
+
+  - platform: homeassistant
+    id: current_condition
+    entity_id: weather.forecast_home
+  
+  - platform: homeassistant
+    id: forecast_day1
+    entity_id: weather.forecast_home
+    attribute: forecast
+
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    i2c_id: multiplex0channel0
+    address: 0x3C
+    id: oled0
+    lambda: |-
+      if (id(displays_on)) {
+        if (!id(ha_datetime).state.empty()) {
+          int hour = atoi(id(ha_datetime).state.substr(12, 2).c_str());
+          it.printf(0, 0, id(font2), "   %02d", hour);
+        } else {
+          it.print(0, 0, id(font2), "   XX");
+        }
+      }
+
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    i2c_id: multiplex0channel1
+    address: 0x3C
+    id: oled1
+    lambda: |-
+      if (id(displays_on)) {
+        if (!id(ha_datetime).state.empty()) {
+          int minutes = atoi(id(ha_datetime).state.substr(15, 2).c_str());
+          it.printf(0, 0, id(font2), "%02d", minutes);
+        } else {
+          it.print(0, 0, id(font2), "XX");
+        }
+      }
+
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    i2c_id: multiplex0channel4
+    address: 0x3C
+    id: oled2
+    lambda: |-
+      if (id(displays_on)) {
+        std::string cond = id(current_condition).state;
+        ESP_LOGD("weather", "Current condition: '%s'", cond.c_str());
+        if (cond == "partlycloudy") cond = "Partly Cloudy";
+        else if (cond == "cloudy") cond = "Cloudy";
+        else if (cond == "sunny") cond = "Sunny";
+        else if (cond == "rainy") cond = "Rainy";
+        else if (cond == "clear-night") cond = "Clear Night";
+        else cond[0] = toupper(cond[0]); // Capitalize first letter as fallback
+
+        size_t space_pos = cond.find(' ');
+
+        if (space_pos != std::string::npos) {
+            std::string first_word = cond.substr(0, space_pos);
+            std::string second_word = cond.substr(space_pos + 1);
+
+            it.print(0, 0, id(font3), first_word.c_str());
+            it.print(0, 28, id(font3), second_word.c_str()); // second line
+        } else {
+            it.print(0, 0, id(font3), cond.c_str()); // single word
+        }
+      }
+
+
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    i2c_id: multiplex0channel3
+    address: 0x3C
+    id: oled3
+    lambda: |-
+      if (id(displays_on)) {
+        it.printf(0, 0, id(font7), "Outside");
+        it.printf(0, 21, id(font7), "%.1f F", id(outside_temp).state);
+        it.printf(0, 43, id(font7), "Hum: %.0f%%", id(outside_humidity).state);
+      }
+
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    i2c_id: multiplex0channel5
+    address: 0x3C
+    id: oled4
+    lambda: |-
+      if (id(displays_on)) {
+        // Pi-hole A
+        if (id(pi_hole_a).state) it.print(0, 0, id(font7), "Pi-hole A: ON");
+        else it.print(0, 0, id(font7), "Pi-hole A: OFF");
+
+        // Pi-hole B
+        if (id(pi_hole_b).state) it.print(0, 21, id(font7), "Pi-hole B: ON");
+        else it.print(0, 21, id(font7), "Pi-hole B: OFF");
+
+        // Router WAN
+        if (id(router_wan).state) it.print(0, 43, id(font7), "WAN: UP");
+        else it.print(0, 43, id(font7), "WAN: DOWN");
+      }
+
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    i2c_id: multiplex0channel2
+    address: 0x3C
+    id: oled5
+    lambda: |-
+      if (id(displays_on)) {
+        float temp_f = id(thermistor_temp).state * 9.0 / 5.0 + 32.0;  
+        it.print(0, 0, id(font5), "Inside");
+        it.printf(0, 32, id(font5), "%.1f F", temp_f);
+      }
+
+font:
+  - file: "gfonts://Roboto"
+    id: font1
+    size: 14
+  - file: "gfonts://Roboto"
+    id: font2
+    size: 62
+  - file: "gfonts://Roboto"
+    id: font3
+    size: 28
+  - file: "gfonts://Roboto"
+    id: font4
+    size: 16
+  - file: "gfonts://Roboto"
+    id: font5
+    size: 32
+  - file: "gfonts://Roboto"
+    id: font6
+    size: 24
+  - file: "gfonts://Roboto"
+    id: font7
+    size: 22
+
+
+switch:
+  - platform: restart
+    name: esp-dash restart
+  - platform: template
+    name: "OLED Displays"
+    turn_on_action:
+      - globals.set:
+          id: displays_on
+          value: 'true'
+    turn_off_action:
+      - globals.set:
+          id: displays_on
+          value: 'false'
+    optimistic: true
+
+  - platform: homeassistant
+    id: pi_hole_a
+    entity_id: switch.pi_hole
+  - platform: homeassistant
+    id: pi_hole_b
+    entity_id: switch.pi_hole_2
+
+binary_sensor:
+  - platform: status
+    name: esp-dash status
+
+  - platform: homeassistant
+    id: router_wan
+    entity_id: binary_sensor.exos_router_wan_status 
